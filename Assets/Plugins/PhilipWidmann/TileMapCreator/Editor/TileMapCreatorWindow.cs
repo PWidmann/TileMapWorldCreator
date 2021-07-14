@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
+using UnityEditorInternal;
 using UnityEngine.Tilemaps;
 using System;
 
@@ -10,7 +11,7 @@ namespace TileMapWorldMaker
     [ExecuteInEditMode]
     public class TileMapCreatorWindow : EditorWindow
     {
-        public static TileMapCreatorWindow instance;
+        private static TileMapCreatorWindow instance;
 
         // Map values
         private static int mapWidth = 100;
@@ -25,6 +26,8 @@ namespace TileMapWorldMaker
         // Noise values
         PerlinNoise noise;
         float[,] noiseValues;
+        Vector2[] tileHeightValues;
+
 
         // Tilemap
         private GameObject grid;
@@ -39,7 +42,6 @@ namespace TileMapWorldMaker
         // Creator window interface
         private Vector2 scrollPosition1;
         private Vector2 scrollPosition2;
-        private Vector2 scrollPosition3;
         private Texture2D previewTexture;
         private Rect previewTextureRect = new Rect(5, 170, 200, 200);
         private GUIStyle errorStyle = new GUIStyle();
@@ -47,20 +49,16 @@ namespace TileMapWorldMaker
         private int currentTab = 0;
         private int lastTab = 0;
 
-
         private void OnEnable()
         {
             previewTexture = new Texture2D(100, 100, TextureFormat.ARGB32, false);
             previewTexture.filterMode = FilterMode.Point;
 
-            numberOfSprites = 0;
-
-            SceneView sv = SceneView.sceneViews[0] as SceneView;
-            sv.in2DMode = true;
-
             errorStyle.fontSize = 18;
             errorStyle.normal.textColor = Color.red;
             errorStyle.fontStyle = FontStyle.Bold;
+
+            DrawPreviewTexture();
         }
 
         [MenuItem("Tools/TileMap Worldmaker %t")]
@@ -77,12 +75,15 @@ namespace TileMapWorldMaker
 
         private void OnGUI()
         {
-            string[] tabs = { "Map Settings", "Tile Settings", "Perlin Values" };
-            currentTab = GUILayout.Toolbar(currentTab, tabs, GUILayout.Height(20));
+            string[] tabs = { "Map Settings", "Perlin Values" };
+            currentTab = GUILayout.Toolbar(currentTab, tabs, GUILayout.Height(30));
 
+            // Fixes inputfield-value copy bug when switching tabs
             if (currentTab != lastTab)
             {
                 GUI.FocusControl(null);
+                
+                AssignNewHeightValues();
             }
 
             switch (currentTab)
@@ -91,45 +92,58 @@ namespace TileMapWorldMaker
                     DrawLeftTab();
                     break;
                 case 1: // Tile settings tab
-                    DrawMiddleTab();
-                    break;
-                case 2: // Perlin values tab
                     DrawRightTab();
                     break;
             }
             lastTab = currentTab;
-
-
         }
 
         private void DrawLeftTab()
         {
             scrollPosition1 = GUILayout.BeginScrollView(scrollPosition1);
-            EditorGUILayout.LabelField("Blah map settings: ");
-            mapWidth = EditorGUILayout.IntField("TileMap Width: ", Mathf.Clamp(mapWidth, 10, 2000));
-            mapHeight = EditorGUILayout.IntField("TileMap Height: ", Mathf.Clamp(mapHeight, 10, 2000));
-            GUILayout.EndScrollView();
-        }
+            EditorGUILayout.LabelField("Please fill in the desired map size: ");
+            mapWidth = EditorGUILayout.IntField("TileMap Width: ", Mathf.Clamp(mapWidth, 10, 500));
+            mapHeight = EditorGUILayout.IntField("TileMap Height: ", Mathf.Clamp(mapHeight, 10, 500));
 
-        private void DrawMiddleTab()
-        {
-            scrollPosition2 = GUILayout.BeginScrollView(scrollPosition2);
-            EditorGUILayout.LabelField("Blah tile settings: ");
+            // Sprites
+            EditorGUILayout.HelpBox("Set the number of different tiles you want to use and reference the sprites for the tiles: ", MessageType.Info);
             GUILayout.Space(20);
-            numberOfSprites = EditorGUILayout.IntField("Number of sprites: ", Mathf.Clamp(numberOfSprites, 0, 20));
+            
+            numberOfSprites = EditorGUILayout.IntField("Number of sprites: ", Mathf.Clamp(numberOfSprites, 2, 10));
             if (numberOfSprites != spritesInitialized && numberOfSprites > 0)
             {
+                
                 spriteInput = new Sprite[numberOfSprites];
                 spritesInitialized = numberOfSprites;
+
+
+
+                
             }
             GUILayout.Space(20);
-            EditorGUILayout.BeginHorizontal();
-            // Draw dynamic sprite references
             for (int i = 0; i < numberOfSprites; i++)
             {
+                EditorGUILayout.BeginHorizontal();
                 spriteInput[i] = (Sprite)EditorGUILayout.ObjectField("", spriteInput[i], typeof(Sprite), false, GUILayout.Width(70));
+
+                if (i == 0)
+                {
+                    GUILayout.Space(10);
+                    EditorGUILayout.BeginVertical();
+                    GUILayout.Space(25);
+                    EditorGUILayout.LabelField("This tile will be drawn at the maximum height value.");
+                    EditorGUILayout.EndVertical();
+                }
+                if (i == numberOfSprites - 1)
+                {
+                    GUILayout.Space(10);
+                    EditorGUILayout.BeginVertical();
+                    GUILayout.Space(25);
+                    EditorGUILayout.LabelField("This tile will be drawn at the minimum height value.");
+                    EditorGUILayout.EndVertical();
+                }
+                EditorGUILayout.EndHorizontal();
             }
-            EditorGUILayout.EndHorizontal();
             GUILayout.Space(10);
 
             // Error message fill in all sprite references
@@ -139,10 +153,7 @@ namespace TileMapWorldMaker
                 {
                     if (spriteInput[i] == null)
                     {
-                        GUI.color = Color.red;
-                        
-                        GUILayout.Label("Please fill in all sprite references", errorStyle);
-                        GUI.color = Color.white;
+                        PrintErrorLabel("  Please fill in all sprite references.");
                         break;
                     }
                 }
@@ -153,57 +164,95 @@ namespace TileMapWorldMaker
 
         private void DrawRightTab()
         {
-            scrollPosition3 = GUILayout.BeginScrollView(scrollPosition3);
+            scrollPosition2 = GUILayout.BeginScrollView(scrollPosition2);
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.BeginVertical();
             EditorGUILayout.LabelField("Perlin Values: ");
             seed = EditorGUILayout.IntField("Seed: ", Mathf.Clamp(seed, 0, int.MaxValue));
             scale = EditorGUILayout.FloatField("Scale: ", Mathf.Clamp(scale, 0f, 50f));
-            amplitude = EditorGUILayout.IntField("Amplitude: ", amplitude);
+            //amplitude = EditorGUILayout.IntField("Amplitude: ", amplitude);
             lacunarity = EditorGUILayout.FloatField("Lacunarity: ", Mathf.Clamp(lacunarity, 0, 5f));
-            persistance = EditorGUILayout.FloatField("Persistance: ", Mathf.Clamp(persistance, 0, 1f));
-            octaves = EditorGUILayout.IntField("Octaves: ", octaves);
-
-            // Horizontal line
-            //EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
+            //persistance = EditorGUILayout.FloatField("Persistance: ", Mathf.Clamp(persistance, 0, 1f));
+            //octaves = EditorGUILayout.IntField("Octaves: ", octaves);
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.EndHorizontal();
 
             GUILayout.Space(10);
 
+            
+            //////////////////////////////////
+            // Sprite Height Values
+            //////////////////////////////////
+            for (int i = 0; i < numberOfSprites; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                GUI.enabled = false;
+                spriteInput[i] = (Sprite)EditorGUILayout.ObjectField("", spriteInput[i], typeof(Sprite), false, GUILayout.Width(70));
+                GUI.enabled = true;
+
+                EditorGUILayout.BeginVertical();
+                EditorGUIUtility.labelWidth = 40;
+
+                if (i == 0)
+                {
+                    GUI.enabled = false;
+                    tileHeightValues[i].x = EditorGUILayout.FloatField("Max: ", 1);
+                    GUI.enabled = true;
+                    tileHeightValues[i].y = EditorGUILayout.FloatField("Min: ", Mathf.Clamp(tileHeightValues[i].y, 0f, 1f));
+                }
+                else if (i == numberOfSprites - 1)
+                {
+                    
+                    tileHeightValues[i].x = EditorGUILayout.FloatField("Max: ", Mathf.Clamp(tileHeightValues[i].x, 0f, 1f));
+                    GUI.enabled = false;
+                    tileHeightValues[i].y = EditorGUILayout.FloatField("Min: ", 0);
+                    GUI.enabled = true;
+                }
+                else
+                {
+                    tileHeightValues[i].x = EditorGUILayout.FloatField("Max: ", Mathf.Clamp(tileHeightValues[i].x, 0f, 1f));
+                    tileHeightValues[i].y = EditorGUILayout.FloatField("Min: ", Mathf.Clamp(tileHeightValues[i].y, 0f, 1f));
+                }
+                
+                EditorGUILayout.EndVertical();        
+                EditorGUILayout.EndHorizontal();
+            }
+
+            EditorGUILayout.BeginVertical();
+            GUILayout.Space(10);
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Generate Map"))
             {
                 CreateMapObject();
-
                 CreateTilesOutOfSprites();
-
                 SetTiles();
             }
 
             if (GUILayout.Button("Default Values"))
             {
+                GUI.FocusControl(null);
+
                 seed = 1337;
                 scale = 7;
                 amplitude = 4;
                 lacunarity = 1;
                 persistance = 0.5f;
                 octaves = 8;
+
+                ResetHeightValues();
             }
+            EditorGUILayout.EndVertical();
 
             EditorGUILayout.EndHorizontal();
-            DrawPreviewTexture();
-
-            
-
-            //GUILayout.Label(previewTexture);
-
             GUILayout.Label("Map Preview:");
-
-            Rect lastElement = GUILayoutUtility.GetLastRect();
-
             GUILayout.Label(previewTexture);
-
-            //GUI.Label(new Rect(0, lastElement.y + 30, previewTexture.width, previewTexture.height), previewTexture);
-
             GUILayout.EndScrollView();
-            
+
+            if (GUI.changed)
+            {
+                DrawPreviewTexture();
+            }
         }
 
         private void DrawPreviewTexture()
@@ -211,15 +260,65 @@ namespace TileMapWorldMaker
             previewTexture = new Texture2D(mapWidth, mapHeight, TextureFormat.ARGB32, false);
             CreateNoiseValues();
 
-            for (int x = 0; x < mapWidth; x++)
+            if (tileHeightValues != null)
             {
-                for (int y = 0; y < mapHeight; y++)
+                for (int x = 0; x < mapWidth; x++)
                 {
-                    previewTexture.SetPixel(x, y, new Color(noiseValues[x, y], noiseValues[x, y], noiseValues[x, y], 1));
+                    for (int y = 0; y < mapHeight; y++)
+                    {
+                        float currentHeight = noiseValues[x, y];
+
+                        for (int i = 0; i < tileHeightValues.Length; i++)
+                        {
+                            if (currentHeight <= tileHeightValues[i].x && currentHeight >= tileHeightValues[i].y)
+                            {
+                                Color texSimpleColor = EditorUtils.GetTextureAverageColor(spriteInput[i]);
+                                previewTexture.SetPixel(x, y, new Color(texSimpleColor.r, texSimpleColor.g, texSimpleColor.b, 1));
+                                break;
+                            }
+                        }
+                    }
                 }
             }
+            
             previewTexture.filterMode = FilterMode.Point;
             previewTexture.Apply();
+        }
+
+        private void AssignNewHeightValues()
+        {
+            // Set default height values equally distributed according to the number of sprites used
+            if (tileHeightValues == null || tileHeightValues.Length != numberOfSprites)
+            {
+                tileHeightValues = new Vector2[numberOfSprites];
+
+                float pieceHeight = 1f / (float)numberOfSprites;
+
+                float currentHeight = 1;
+
+                for (int i = 0; i < numberOfSprites; i++)
+                {
+                    tileHeightValues[i] = new Vector2(currentHeight, currentHeight - pieceHeight);
+                    currentHeight -= pieceHeight;
+                    if (currentHeight <= 0) currentHeight = 0;
+                }
+            }
+        }
+
+        private void ResetHeightValues()
+        {
+            tileHeightValues = new Vector2[numberOfSprites];
+
+            float pieceHeight = 1f / (float)numberOfSprites;
+
+            float currentHeight = 1;
+
+            for (int i = 0; i < numberOfSprites; i++)
+            {
+                tileHeightValues[i] = new Vector2(currentHeight, currentHeight - pieceHeight);
+                currentHeight -= pieceHeight;
+                if (currentHeight <= 0) currentHeight = 0;
+            }
         }
 
         private void CreateTilesOutOfSprites()
@@ -246,16 +345,20 @@ namespace TileMapWorldMaker
 
         private void SetTiles()
         {
-            float increment = 1.0f / finalMapTiles.Length;
-
             for (int x = 0; x < mapWidth; x++)
             {
                 for (int y = 0; y < mapHeight; y++)
                 {
                     float currentHeight = noiseValues[x, y];
-                    int selectedTileIndex = (int)(currentHeight / increment);
 
-                    groundTileMap.SetTile(new Vector3Int(x, y, 0), finalMapTiles[selectedTileIndex]);
+                    for (int i = 0; i < tileHeightValues.Length; i++)
+                    {
+                        if (currentHeight <= tileHeightValues[i].x && currentHeight >= tileHeightValues[i].y)
+                        {
+                            groundTileMap.SetTile(new Vector3Int(x, y, 0), finalMapTiles[i]);
+                            break;
+                        }
+                    } 
                 }
             }
         }
@@ -283,6 +386,11 @@ namespace TileMapWorldMaker
             tr.sortingLayerName = "Default";
 
             return tm;
+        }
+
+        private void PrintErrorLabel(string _message)
+        {
+            GUILayout.Label(_message, errorStyle);
         }
     }
 }
